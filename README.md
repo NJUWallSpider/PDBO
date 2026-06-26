@@ -3,8 +3,6 @@
 PDBO is a JAX implementation of primal-dual optimization for binary optimization,
 released with the paper **Smoothing Binary Optimization: A Primal-Dual Perspective**.
 
-The solver supports general differentiable continuous extensions on `[0, 1]^n`,
-with a fast quadratic/QUBO path for Max-Cut, MIS, LABS, and related problems.
 
 ## Installation
 
