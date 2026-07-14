@@ -1,6 +1,3 @@
-jax
-jaxlib
 networkx
 numpy
-optax
 scipy

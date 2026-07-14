@@ -29,7 +29,9 @@ def random_graph(n, d, seed=0):
     sorted_nodes = sorted(nx_temp.nodes())
     mapping = {old: new for new, old in enumerate(sorted_nodes)}
     G_temp = nx.relabel_nodes(nx_temp, mapping)
-    nx_graph = nx.OrderedGraph()
+    # Modern NetworkX graphs preserve insertion order; OrderedGraph was
+    # removed in newer releases.
+    nx_graph = nx.Graph()
     nx_graph.add_nodes_from(sorted(G_temp.nodes()))
     nx_graph.add_edges_from(G_temp.edges())
     for u, v in nx_graph.edges():

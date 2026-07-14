@@ -1,7 +1,12 @@
 # PDBO
 
-PDBO is a JAX implementation of primal-dual optimization for binary optimization,
-released with the paper **Smoothing Binary Optimization: A Primal-Dual Perspective**.
+PDBO is a CPU implementation of the original primal-dual algorithm from
+**Smoothing Binary Optimization: A Primal-Dual Perspective**.
+
+The solver follows paper Algorithm 1 directly: fixed-step projected gradient
+descent, a simultaneous dual update using the old primal iterate, and the
+paper's deterministic centre perturbation. It does not use RMSProp/Adam,
+optimizer momentum, or the previous Gauss-Seidel-style new-primal dual update.
 
 
 ## Installation
@@ -9,9 +14,6 @@ released with the paper **Smoothing Binary Optimization: A Primal-Dual Perspecti
 ```bash
 pip install -e .
 ```
-
-For GPU runs, install the JAX build that matches your CUDA version before installing
-this package. See the official JAX installation guide for platform-specific wheels.
 
 To run smoke tests:
 
@@ -64,13 +66,13 @@ data = generate_mis(graph, penalty=4)
 
 solver = PDBOSolver(
     n_vars=data["num_vars"],
-    objective_type="quadratic",
     Q_indices=data["Q_indices"],
     Q_values=data["Q_values"],
     c=data["c"],
     batch_size=10,
     primal_lr=0.02,
     dual_lr=0.02,
+    tolerance=1e-8,  # Algorithm 1 tolerance delta
     dual_init=5,
     rounding_samples=8,
     seed=0,
@@ -80,26 +82,7 @@ print(solver.ObjVal, solver.X)
 print(result.objective, result.incumbent)
 ```
 
-For custom objectives, provide a differentiable JAX function defining a continuous
-extension on `[0, 1]^n`:
-
-```python
-import jax.numpy as jnp
-from pdbo import PDBOSolver
-
-def extension(x):
-    return jnp.sum((x[:-1] - x[1:]) ** 2) + 0.1 * jnp.sum(x)
-
-solver = PDBOSolver(
-    n_vars=100,
-    objective_type="custom",
-    objective_fn=extension,
-    batch_size=32,
-)
-result = solver.optimize()
-```
-
-`PDQuboSolver` remains available as a compatibility wrapper for the quadratic path.
+`PDQuboSolver` remains available as an alias for `PDBOSolver`.
 
 ## Options
 
@@ -115,18 +98,37 @@ Extra rounded candidates sampled from the final relaxed batch:
 python main.py --task mc --graph Gset --Gset_id 1 --rounding_samples 8
 ```
 
+Restart once from the first phase's best rounded solution. The primal batch is
+reset to that solution and the dual variables are restored to `dual_init`
+before a second phase with the same `max_iters` budget:
+
+```bash
+python main.py --task mc --graph Gset --Gset_id 1 --restart
+```
+
 Greedy one-flip local-search refinement:
 
 ```bash
 python main.py --task mc --graph Gset --Gset_id 1 --refine
 ```
 
-Perturbation is disabled by default. It can help under short budgets or highly
-fractional stagnation, but may slightly hurt some long-budget runs:
+Set the deterministic centre-perturbation tolerance from paper Algorithm 1:
 
 ```bash
-python main.py --task mc --graph Gset --Gset_id 1 --perturbation --perturbation_fraction 0.05
+python main.py --task mc --graph Gset --Gset_id 1 --delta 1e-4
 ```
+
+Experiment with the alternative integrality function
+`g(x) = |x - 1/2| - 1/2`. The original `g(x) = x^2 - x` remains the default.
+In the alternative mode, perturbation is applied only when a coordinate is
+exactly `x = 1/2`:
+
+```bash
+python main.py --task mc --graph Gset --Gset_id 1 --g_type absolute
+```
+
+Saved results for this mode use `result/pdbo_absolute/`, separate from the
+default algorithm's results.
 
 For quadratic objectives, `--quadratic_backend sparse` is the default. Use
 `--quadratic_backend edge` to evaluate the QUBO directly from edge indices.
@@ -150,7 +152,7 @@ If you use this code, please cite:
 ## Repository Layout
 
 - `pdbo/`: public package API.
-- `solver_jax.py`: PDBO solver implementations.
+- `solver_cpu.py`: paper-aligned CPU PDBO implementation.
 - `problem_parser.py`: problem parsers and QUBO builders.
 - `main.py`: command-line entry point.
 - `examples/`: small runnable examples for each supported problem type.

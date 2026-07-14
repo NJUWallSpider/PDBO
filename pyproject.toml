@@ -10,11 +10,8 @@ readme = "README.md"
 requires-python = ">=3.9"
 license = {file = "LICENSE"}
 dependencies = [
-    "jax",
-    "jaxlib",
     "networkx",
     "numpy",
-    "optax",
     "scipy",
 ]
 
@@ -23,5 +20,5 @@ gurobi = ["gurobipy"]
 test = ["pytest"]
 
 [tool.setuptools]
-py-modules = ["main", "problem_parser", "solver_jax", "utils"]
+py-modules = ["main", "problem_parser", "solver_cpu", "utils"]
 packages = ["pdbo"]

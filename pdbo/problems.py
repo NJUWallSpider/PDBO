@@ -5,7 +5,6 @@ from problem_parser import (
     generate_LABS,
     generate_Max_cut,
     generate_MIS,
-    generate_max_sat,
     parse_gset,
     random_graph,
 )
@@ -19,7 +18,6 @@ __all__ = [
     "evaluate_labs_bits",
     "generate_labs",
     "generate_max_cut",
-    "generate_max_sat",
     "generate_mis",
     "parse_gset",
     "random_graph",
