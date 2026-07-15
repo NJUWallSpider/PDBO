@@ -18,6 +18,7 @@ dependencies = [
 [project.optional-dependencies]
 gurobi = ["gurobipy"]
 test = ["pytest"]
+visualization = ["matplotlib"]
 
 [tool.setuptools]
 py-modules = ["main", "problem_parser", "solver_cpu", "utils"]

@@ -3,7 +3,7 @@ README.md
 main.py
 problem_parser.py
 pyproject.toml
-solver_jax.py
+solver_cpu.py
 utils.py
 pdbo/__init__.py
 pdbo/problems.py

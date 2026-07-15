@@ -1,5 +1,5 @@
 main
 pdbo
 problem_parser
-solver_jax
+solver_cpu
 utils

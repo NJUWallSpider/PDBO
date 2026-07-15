@@ -33,8 +33,30 @@ def build_parser():
     parser.add_argument("--lr_y", type=float, default=0.02)
     parser.add_argument("--delta", type=float, default=1e-8)
     parser.add_argument("--dual_init", type=float, default=5)
-    parser.add_argument("--primal_init", choices=["uniform", "half", "binary"], default="uniform")
+    parser.add_argument(
+        "--primal_init",
+        choices=["center_uniform", "uniform", "half", "binary"],
+        default="center_uniform",
+    )
+    parser.add_argument("--rho", type=float, default=0.1)
     parser.add_argument("--restart", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument(
+        "--spectral_animation",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
+    parser.add_argument("--spectral_animation_bins", type=int, default=50)
+    parser.add_argument("--spectral_animation_every", type=int, default=100)
+    parser.add_argument(
+        "--spectral_animation_hold",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    parser.add_argument(
+        "--spectral_animation_manual",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--penalty", type=float, default=4)
     parser.add_argument("--verbose", action=argparse.BooleanOptionalAction, default=True)
@@ -99,7 +121,13 @@ def build_solver(args, data):
         c=data["c"],
         timelimit=args.timelimit,
         primal_init=args.primal_init,
+        rho=args.rho,
         restart=args.restart,
+        spectral_animation=args.spectral_animation,
+        spectral_animation_bins=args.spectral_animation_bins,
+        spectral_animation_every=args.spectral_animation_every,
+        spectral_animation_hold=args.spectral_animation_hold,
+        spectral_animation_manual=args.spectral_animation_manual,
         tolerance=args.delta,
         patience=args.patience,
         min_delta=args.min_delta,

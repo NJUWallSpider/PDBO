@@ -1,8 +1,5 @@
-jax
-jaxlib
 networkx
 numpy
-optax
 scipy
 
 [gurobi]
@@ -10,3 +7,6 @@ gurobipy
 
 [test]
 pytest
+
+[visualization]
+matplotlib

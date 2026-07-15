@@ -10,6 +10,91 @@ def empty_qubo():
     return np.empty((2, 0), dtype=np.int32), np.empty(0, dtype=np.float32)
 
 
+def test_center_uniform_initialization_stays_within_rho():
+    indices, values = empty_qubo()
+    solver = PDBOSolver(
+        n_vars=100,
+        Q_indices=indices,
+        Q_values=values,
+        batch_size=4,
+        max_iters=0,
+        rho=0.05,
+        seed=0,
+        verbose=False,
+    )
+
+    assert solver.primal.shape == (4, 100)
+    assert np.all(solver.primal >= 0.45)
+    assert np.all(solver.primal < 0.55)
+    assert np.std(solver.primal) > 0.0
+
+
+def test_spectral_window_detects_minimum_eigenspace_multiplicity():
+    indices = np.array([[0, 1, 2], [0, 1, 2]], dtype=np.int32)
+    values = np.array([-2.0, -2.0, 1.0], dtype=np.float32)
+    solver = PDBOSolver(
+        n_vars=3,
+        Q_indices=indices,
+        Q_values=values,
+        max_iters=0,
+        verbose=False,
+    )
+
+    mode, _, counts = solver._compute_spectrum_distribution()
+    lambda_1, lambda_next, multiplicity = solver._compute_spectral_window()
+    assert mode == "exact"
+    assert np.isclose(np.sum(counts), 3.0)
+    assert np.isclose(lambda_1, -2.0)
+    assert np.isclose(lambda_next, 1.0)
+    assert multiplicity == 2
+
+
+def test_spectral_animation_bins_mean_mode_lengths():
+    indices = np.array([[0, 1, 2, 3], [0, 1, 2, 3]], dtype=np.int32)
+    values = np.array([-2.0, -1.0, 1.0, 2.0], dtype=np.float32)
+    solver = PDBOSolver(
+        n_vars=4,
+        Q_indices=indices,
+        Q_values=values,
+        batch_size=1,
+        max_iters=0,
+        spectral_animation=True,
+        spectral_animation_bins=2,
+        spectral_animation_hold=False,
+        verbose=False,
+    )
+    solver.primal[...] = [[0.6, 0.3, 0.8, 0.1]]
+    solver._compute_spectrum_distribution()
+    edges = solver._histogram_edges(-2.0, 2.0, 2)
+    solver._animation_bin_indices = np.clip(
+        np.searchsorted(edges, solver._exact_eigenvalues, side="right") - 1,
+        0,
+        1,
+    )
+
+    assert np.allclose(solver._spectral_mode_bin_means(), [0.15, 0.35])
+
+
+def test_spectral_animation_manual_control_state():
+    indices, values = empty_qubo()
+    solver = PDBOSolver(
+        n_vars=2,
+        Q_indices=indices,
+        Q_values=values,
+        max_iters=0,
+        spectral_animation=True,
+        spectral_animation_manual=True,
+        spectral_animation_hold=False,
+        verbose=False,
+    )
+
+    assert not solver._animation_run_continuous
+    solver._request_spectral_animation_step()
+    assert solver._animation_step_requested
+    solver._toggle_spectral_animation_run()
+    assert solver._animation_run_continuous
+
+
 def test_paper_update_uses_old_primal_for_dual():
     indices, values = empty_qubo()
     solver = PDBOSolver(

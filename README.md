@@ -50,6 +50,57 @@ python main.py --task labs --labs_n 47 --labs_penalty 10000 --batch 100
 
 The default iteration budget is `max_iters=5000`.
 
+The default primal initialization samples each coordinate uniformly around the
+centre:
+
+```text
+x ~ Uniform(0.5 - rho, 0.5 + rho),  rho=0.1
+```
+
+Set the radius with `--rho`, or restore the original full-box initialization
+with `--primal_init uniform`:
+
+```bash
+python main.py --task mc --graph Gset --Gset_id 1 --rho 0.05
+```
+
+Before solving, verbose mode prints a histogram of the full spectrum of
+`W = (Q + Q.T) / 2`, followed by the spectral selection window for each phase.
+The histogram is exact up to 2000 variables and uses stochastic Lanczos
+quadrature (`approx-slq`) for larger sparse problems:
+
+```text
+spectrum_distribution=exact n=800 bins=20 range=[...]
+  [...] count=... pct=... ####
+round=1/2 spectral_window=(-lambda_(r+1), -lambda_1) lambda_1=... lambda_(r+1)=... r=...
+```
+
+Animate the RMS projection length of `x - 0.5` along the eigenvectors of `W`:
+
+```bash
+pip install -e ".[visualization]"
+python main.py --task mc --graph Gset --Gset_id 1 --spectral_animation
+```
+
+The chart uses 50 equal-width eigenvalue bins by default. Within each bin it
+plots the mean mode length across eigenvectors, after taking the RMS across the
+primal batch. It refreshes every 100 iterations; use
+`--spectral_animation_every 10` for more frequent updates. The exact
+eigenvectors required by the animation limit it to `n <= 2000`. The final
+window remains open until it is closed; pass `--no-spectral_animation_hold` to
+exit immediately after solving.
+
+For manual stepping, start the animation in paused mode:
+
+```bash
+python main.py --task mc --graph Gset --Gset_id 1 \
+  --spectral_animation --spectral_animation_manual
+```
+
+`Next step` advances exactly one solver iteration. `Run` switches to continuous
+execution and becomes `Pause` while running. Time spent waiting for manual input
+is excluded from the solver runtime and `timelimit` accounting.
+
 ## Python API
 
 For quadratic objectives, PDBO solves
