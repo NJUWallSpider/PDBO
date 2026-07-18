@@ -9,21 +9,21 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from pdbo import (
-    PDBOSolver,
-    evaluate_labs_bits,
-    generate_labs,
-    generate_max_cut,
-    generate_mis,
+from src.problem_parser import (
+    evaluate_LABS_bits as evaluate_labs_bits,
+    generate_LABS as generate_labs,
+    generate_Max_cut as generate_max_cut,
+    generate_MIS as generate_mis,
     parse_gset,
     random_graph,
 )
+from src.solver import PDBO_CPU
 
 
 def run_quadratic_mis():
     graph = random_graph(n=20, d=3, seed=0)
     data = generate_mis(graph, penalty=4)
-    solver = PDBOSolver(
+    solver = PDBO_CPU(
         n_vars=data["num_vars"],
         Q_indices=data["Q_indices"],
         Q_values=data["Q_values"],
@@ -41,7 +41,7 @@ def run_quadratic_mis():
 def run_gset_maxcut():
     graph = parse_gset(1)
     data = generate_max_cut(graph)
-    solver = PDBOSolver(
+    solver = PDBO_CPU(
         n_vars=data["num_vars"],
         Q_indices=data["Q_indices"],
         Q_values=data["Q_values"],
@@ -59,7 +59,7 @@ def run_gset_maxcut():
 def run_labs_qubo():
     n = 12
     data = generate_labs(n, penalty=10000)
-    solver = PDBOSolver(
+    solver = PDBO_CPU(
         n_vars=data["num_vars"],
         Q_indices=data["Q_indices"],
         Q_values=data["Q_values"],

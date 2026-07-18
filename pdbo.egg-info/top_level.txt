@@ -1,5 +1,3 @@
-main
 pdbo
-problem_parser
-solver_cpu
+src
 utils

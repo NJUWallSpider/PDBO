@@ -1,12 +1,5 @@
 """Solver classes exposed by the PDBO package."""
 
-from solver_cpu import PDBO_CPU, PDBOResult, PDQUBO_CPU
+from src.solver import PDBO_CPU, PDBOResult
 
-PDBOSolver = PDBO_CPU
-PDQuboSolver = PDQUBO_CPU
-
-__all__ = [
-    "PDBOSolver",
-    "PDBOResult",
-    "PDQuboSolver",
-]
+__all__ = ["PDBO_CPU", "PDBOResult"]
