@@ -22,4 +22,4 @@ visualization = ["matplotlib"]
 
 [tool.setuptools]
 py-modules = ["utils"]
-packages = ["src", "pdbo"]
+packages = ["src"]

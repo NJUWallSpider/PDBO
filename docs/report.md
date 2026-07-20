@@ -25,14 +25,14 @@ $$
 
 记 $z = x - \frac{1}{2} \mathbf 1$，直观上 $z$ 是 $x$ 偏离超立方体中心的距离。用 $z$ 替换 $x$，上式可以简化为
 $$
-    \nabla_x L(x, y) = 2(W - \text{Diag}(y)) z.
+    \nabla_x L(x, y) = 2(W + \text{Diag}(y)) z.
 $$
 
 所以在 PDBO 中 Max-Cut 的精确迭代公式为
 
 $$
 
-    z^{t+1} = \Pi_{[-\frac{1}{2}, \frac{1}{2}]}\left[I - 2\alpha(W - \text{Diag} (y^t)) \right]z^t\\
+    z^{t+1} = \Pi_{[-\frac{1}{2}, \frac{1}{2}]}\left[I - 2\alpha(W + \text{Diag} (y^t)) \right]z^t\\
     y_i^{t+1} = y_i^t + \beta\left[(z_i^t)^2 - \frac{1}{4} \right].
 
 $$
@@ -104,5 +104,4 @@ $$
 $$
 
 如果 $\alpha$ 大于此阈值，算法会实效，并且根据实验结论，当 $\alpha$ 接近此阈值时，算法得到的解是最好的。
-
 

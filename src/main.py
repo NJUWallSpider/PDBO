@@ -9,7 +9,6 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from pdbo.refinement import refine_binary_incumbent
 from src.problem_parser import (
     evaluate_LABS_bits as evaluate_labs_bits,
     generate_LABS as generate_labs,
@@ -90,6 +89,12 @@ def build_parser():
     parser.add_argument("--dual_patience_threshold", type=float, default=None)
     parser.add_argument("--dual_patience_every", type=int, default=100)
     parser.add_argument("--g_type", choices=["quadratic", "absolute"], default="quadratic")
+    parser.add_argument(
+        "--rounding",
+        choices=["nearest", "bernoulli"],
+        default="nearest",
+        help="round each relaxed trajectory by nearest integer or Bernoulli sampling",
+    )
     parser.add_argument("--rounding_samples", type=int, default=0)
     parser.add_argument(
         "--conditional_rounding",
@@ -97,8 +102,6 @@ def build_parser():
         default=False,
         help="derandomize the best Bernoulli expectation seen along the trajectory",
     )
-    parser.add_argument("--refine", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--refine_max_passes", type=int, default=None)
     return parser
 
 
@@ -161,12 +164,14 @@ def build_solver(args, data):
         spectral_animation_bins=args.spectral_animation_bins,
         spectral_animation_modes=args.spectral_animation_modes,
         spectral_animation_every=args.spectral_animation_every,
+        maxcut_certificate=args.task == "mc",
         tolerance=args.delta,
         patience=args.patience,
         min_delta=args.min_delta,
         check_every=args.check_every,
         dual_patience_threshold=args.dual_patience_threshold,
         dual_patience_every=args.dual_patience_every,
+        rounding_mode=args.rounding,
         rounding_samples=args.rounding_samples,
         conditional_rounding=args.conditional_rounding,
         g_type=args.g_type,
@@ -174,7 +179,7 @@ def build_solver(args, data):
     )
 
 
-def write_result(path, args, data, solver, solving_time, refinement=None):
+def write_result(path, args, data, solver, solving_time):
     objective_offset = data.get("objective_offset", 0.0)
     incumbents = [value + objective_offset for value in solver.objective_history]
     with open(path, "w") as f:
@@ -185,17 +190,13 @@ def write_result(path, args, data, solver, solving_time, refinement=None):
         f.write("perturbations:" + str(getattr(solver, "perturbation_count", 0)) + "\n")
         f.write("effective primal lr:" + str(solver.primal_lr) + "\n")
         f.write("effective dual init:" + str(solver.dual_init) + "\n")
+        f.write("rounding mode:" + solver.rounding_mode + "\n")
         if solver.conditional_rounding_expected_objective is not None:
             f.write(
                 "conditional rounding expected objective:"
                 + str(solver.conditional_rounding_expected_objective)
                 + "\n"
             )
-        if refinement is not None:
-            f.write("refined objective:" + str(refinement.objective) + "\n")
-            f.write("refinement steps:" + str(refinement.steps) + "\n")
-            f.write("refinement time:" + str(refinement.seconds) + "\n")
-            f.write("refined solution:" + "".join(str(int(x)) for x in refinement.bits) + "\n")
         if args.task == "labs":
             labs_bits = np.array(solver.incumbent[: args.labs_n], dtype=np.int32)
             f.write("labs energy:" + str(evaluate_labs_bits(labs_bits)) + "\n")
@@ -218,21 +219,10 @@ def main():
     solver.optimize()
     solving_time = time.perf_counter() - start
 
-    refinement = None
-    if args.refine:
-        refinement = refine_binary_incumbent(
-            args.task,
-            np.asarray(solver.incumbent, dtype=np.int32),
-            data,
-            max_passes=args.refine_max_passes,
-        )
-
     if args.save:
-        write_result(out_path, args, data, solver, solving_time, refinement)
+        write_result(out_path, args, data, solver, solving_time)
 
     message = f"best={float(solver.objective)} time={solving_time:.6f}s stop={getattr(solver, 'stop_reason', None)}"
-    if refinement is not None:
-        message += f" refined_best={refinement.objective} refine_time={refinement.seconds:.6f}s"
     print(message)
     return 0
 

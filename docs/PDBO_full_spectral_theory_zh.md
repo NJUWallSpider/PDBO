@@ -50,7 +50,7 @@ $$
 \begin{array}{c}
 \text{SDP-dual 可行凸化}\;\longrightarrow\;
 \text{全谱多项式低通}\;\longrightarrow\;
-\text{移动前沿逐级激活}\\[2mm]
+\text{移动前沿逐级激活}\$$2mm]
 \longrightarrow\;
 \text{anisotropy/projection 受迫谱修复}\;\longrightarrow\;
 \text{饱和与舍入}\;\longrightarrow\;
@@ -1043,7 +1043,9 @@ $$
 
 证明只用非负随机变量 $\operatorname{OPT}-C(B)$ 的 Markov 不等式和 $R$ 次独立性。指数 $R$ 不能用于相关样本。
 
-条件期望法还保证存在一个可确定性构造的 cut，其 gap 不超过 (58) 的期望 gap；当前代码使用随机采样而不是该 derandomization。
+条件期望法还保证存在一个可确定性构造的 cut，其 gap 不超过 (58) 的期望 gap；
+当前代码在启用 `conditional_rounding` 时会保存全轨迹最好的 multilinear 期望，
+并在结束时用条件期望法确定性构造该 cut。`rounding_samples` 是另外一个可选的随机采样路径。
 
 ### 定理 12 [U]：threshold rounding 与 archive
 

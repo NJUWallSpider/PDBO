@@ -90,7 +90,7 @@ python src/main.py --task mc --graph Gset --Gset_id 70 --batch 10 \
   --max_iters 3000 --lr_y 0.02 --rho 0.05 \
   --dual_init_mode spectral --dual_burn_in 0 \
   --primal_lr_mode spectral --spectral_step_fraction 0.5 \
-  --conditional_rounding --refine
+  --conditional_rounding
 ```
 
 The automatic parameters are
@@ -104,8 +104,7 @@ Thus `dual_burn_in` measures the idealized number of centre steps before the
 PSD boundary, while `0 < spectral_step_fraction < 1` guarantees a positive
 initial multiplier for every eigenmode. `conditional_rounding` retains the
 best multilinear/Bernoulli expectation seen over the full trajectory and
-derandomizes it at the end. The final one-flip refinement is sparse and
-incremental.
+derandomizes it at the end.
 
 Run PDBO on a LABS instance:
 
@@ -220,12 +219,6 @@ before a second phase with the same `max_iters` budget:
 python src/main.py --task mc --graph Gset --Gset_id 1 --restart
 ```
 
-Greedy one-flip local-search refinement:
-
-```bash
-python src/main.py --task mc --graph Gset --Gset_id 1 --refine
-```
-
 Set the deterministic centre-perturbation tolerance from paper Algorithm 1:
 
 ```bash
@@ -265,7 +258,6 @@ If you use this code, please cite:
 
 ## Repository Layout
 
-- `pdbo/`: public package API.
 - `src/solver.py`: paper-aligned CPU PDBO implementation.
 - `src/problem_parser.py`: problem parsers and QUBO builders.
 - `src/main.py`: command-line entry point.

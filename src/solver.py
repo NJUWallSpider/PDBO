@@ -17,8 +17,10 @@ from scipy.sparse import linalg as sparse_linalg
 from src.spectral import (
     DEFAULT_ANIMATION_MODES,
     EXACT_SPECTRUM_LIMIT,
+    HsSpectrumCertificate,
     SpectrumDistribution,
     compute_animation_modes,
+    compute_h_s_spectrum_certificate,
     compute_spectral_window,
     compute_spectrum_distribution,
     largest_eigenvalue,
@@ -80,6 +82,8 @@ class PDBO_CPU:
             spectral_animation_bins: int = 50,
             spectral_animation_modes: int = DEFAULT_ANIMATION_MODES,
             spectral_animation_every: int = 100,
+            maxcut_certificate: bool = False,
+            rounding_mode: str = 'nearest',
     ):
         if primal_init not in {'center_uniform', 'uniform', 'half', 'binary'}:
             raise ValueError(
@@ -115,6 +119,8 @@ class PDBO_CPU:
             raise ValueError("dual_patience_threshold must be non-negative or None")
         if dual_patience_every < 1:
             raise ValueError("dual_patience_every must be positive")
+        if rounding_mode not in {'nearest', 'bernoulli'}:
+            raise ValueError("rounding_mode must be 'nearest' or 'bernoulli'")
         if rounding_samples < 0:
             raise ValueError("rounding_samples must be non-negative")
         if spectral_animation_bins < 1:
@@ -149,12 +155,14 @@ class PDBO_CPU:
         self.spectral_animation_bins = spectral_animation_bins
         self.spectral_animation_modes = spectral_animation_modes
         self.spectral_animation_every = spectral_animation_every
+        self.maxcut_certificate = maxcut_certificate
         self.step_callback = step_callback
         self.patience = patience
         self.min_delta = min_delta
         self.check_every = check_every
         self.dual_patience_threshold = dual_patience_threshold
         self.dual_patience_every = dual_patience_every
+        self.rounding_mode = rounding_mode
         self.rounding_samples = rounding_samples
         self.conditional_rounding = conditional_rounding
         self.g_type = g_type
@@ -184,11 +192,15 @@ class PDBO_CPU:
         self.spectrum_distribution: Optional[SpectrumDistribution] = None
         self.spectrum_distribution_error = None
         self.animation: Optional[SpectralAnimation] = None
+        self._incumbent_certificate_bits = None
+        self._incumbent_certificate: Optional[HsSpectrumCertificate] = None
+        self.dual_history: list[tuple[int, np.ndarray]] = []
+        self._incumbent_records: dict[tuple[int, ...], tuple[np.ndarray, float, int]] = {}
 
         self.dual_init = self._resolve_dual_init()
         self.primal_lr = self._resolve_primal_lr()
         self.primal, self.dual = self._init_variables(self.dual_init, primal_init, rho)
-        rounded_initial = np.rint(self.primal).astype(np.float32)
+        rounded_initial = self._round_primal(self.primal)
         initial_candidates = np.concatenate(
             (rounded_initial, np.zeros((1, self.n), dtype=np.float32)),
             axis=0,
@@ -262,7 +274,7 @@ class PDBO_CPU:
         return float(np.nextafter(target32, np.float32(np.inf)))
 
     def _resolve_primal_lr(self) -> float:
-        """Return the configured step or enforce a positive initial spectral multiplier."""
+        """Return the configured step or make the initial spectral map non-expansive."""
         if self.primal_lr_mode == 'configured':
             return self.configured_primal_lr
 
@@ -430,8 +442,14 @@ class PDBO_CPU:
         ).astype(np.float32, copy=False)
         self.perturbation_count += int(np.count_nonzero(trigger))
 
+    def _round_primal(self, primal: np.ndarray) -> np.ndarray:
+        """Round relaxed states according to the configured archive policy."""
+        if self.rounding_mode == 'bernoulli':
+            return (self.rng.random(primal.shape) < primal).astype(np.float32)
+        return np.rint(primal).astype(np.float32)
+
     def _update_incumbent(self) -> bool:
-        rounded = np.rint(self.primal).astype(np.float32)
+        rounded = self._round_primal(self.primal)
         candidates = np.concatenate((rounded, self.incumbent[np.newaxis, :]), axis=0)
         values = self._score_candidates(candidates)
         index = int(np.argmin(values))
@@ -440,6 +458,66 @@ class PDBO_CPU:
         self.objective = candidate_value
         self.incumbent = candidates[index].copy()
         return improved
+
+    def _stability_tracking_enabled(self) -> bool:
+        return self.batch_size == 1 and self.maxcut_certificate
+
+    def _record_dual_state(self, iteration: int) -> None:
+        if self._stability_tracking_enabled():
+            self.dual_history.append(
+                (int(iteration), np.asarray(self.dual[0], dtype=np.float32).copy())
+            )
+
+    def _record_incumbent(self, iteration: int) -> None:
+        if not self._stability_tracking_enabled():
+            return
+        incumbent = np.rint(self.incumbent).astype(np.int8, copy=False)
+        key = tuple(int(value) for value in incumbent)
+        if key not in self._incumbent_records:
+            self._incumbent_records[key] = (
+                incumbent.copy(),
+                float(self.objective),
+                int(iteration),
+            )
+
+    def _report_incumbent_stability(self) -> None:
+        if not self._stability_tracking_enabled() or not self.verbose:
+            return
+
+        records = []
+        for incumbent, objective, first_seen in self._incumbent_records.values():
+            sign = 2.0 * incumbent.astype(np.float64) - 1.0
+            gains = sign * np.asarray(self.W @ sign, dtype=np.float64).reshape(-1)
+            first_stable = None
+            max_violation = None
+            for iteration, dual in self.dual_history:
+                residual = gains + dual.astype(np.float64)
+                violation = float(np.max(residual))
+                if violation <= 1e-8:
+                    first_stable = iteration
+                    max_violation = violation
+                    break
+            records.append(
+                {
+                    "cut_value": -float(objective),
+                    "first_seen": first_seen,
+                    "first_stable": first_stable,
+                    "max_violation": max_violation,
+                }
+            )
+
+        records.sort(key=lambda record: (-record["cut_value"], record["first_seen"]))
+        print("incumbent first-stability times (sorted by cut value):")
+        for rank, record in enumerate(records, start=1):
+            stable = (
+                str(record["first_stable"])
+                if record["first_stable"] is not None
+                else "never"
+            )
+            print(
+                f"  {rank}: cut={record['cut_value']:.10g} "
+                f"first_seen={record['first_seen']} first_stable_t={stable}"
+            )
 
     def _restart_from_incumbent(self) -> None:
         """Restart both variables from the first phase's best rounded solution."""
@@ -520,6 +598,7 @@ class PDBO_CPU:
                 eigenvectors,
                 self.spectral_animation_bins,
                 mode_label=mode_label,
+                show_a_t=self.maxcut_certificate,
             )
             self.animation.setup(self.primal, self.dual)
 
@@ -545,6 +624,64 @@ class PDBO_CPU:
             float(np.mean(lagrangian_values, dtype=np.float64)),
             float(np.mean(objective_values, dtype=np.float64)),
         )
+
+    def _current_incumbent_certificate(self) -> HsSpectrumCertificate:
+        """Return the cached spectral certificate for the current best cut."""
+        bits = np.asarray(self.incumbent, dtype=np.int8)
+        if (
+            self._incumbent_certificate is not None
+            and self._incumbent_certificate_bits is not None
+            and np.array_equal(bits, self._incumbent_certificate_bits)
+        ):
+            return self._incumbent_certificate
+
+        sign = 2.0 * bits.astype(np.float64) - 1.0
+        # G(x) = s * (W s), so H_s = W - Diag(G(x)).
+        certificate = compute_h_s_spectrum_certificate(
+            self.W,
+            sign,
+            self.seed,
+            bins=self.spectral_animation_bins,
+        )
+        self._incumbent_certificate_bits = bits.copy()
+        self._incumbent_certificate = certificate
+        return certificate
+
+    def _a_t_animation_payload(self) -> dict:
+        """Return the current batch-mean ``A_t`` spectrum for the animation."""
+        if not self.maxcut_certificate:
+            return {}
+
+        # A batch contains one coordinate-dual vector per trajectory.  The
+        # single spectrum panel represents their coordinate-wise mean.
+        mean_dual = np.mean(np.asarray(self.dual, dtype=np.float64), axis=0)
+        a_t = (
+            self.W.astype(np.float64)
+            + sparse.diags(mean_dual, format="csr", dtype=np.float64)
+        ).tocsr()
+        distribution = compute_spectrum_distribution(
+            a_t,
+            self.n,
+            self.seed,
+            bins=self.spectral_animation_bins,
+        )
+        if distribution.eigenvalues is not None:
+            lambda_min = float(distribution.eigenvalues[0])
+        else:
+            lambda_min = float(distribution.edges[0])
+        kappa = max(-lambda_min, 0.0)
+        incumbent_certificate = self._current_incumbent_certificate()
+        incumbent_cert_kappa = max(-float(incumbent_certificate.lambda_min), 0.0)
+        return {
+            "a_t_edges": distribution.edges,
+            "a_t_counts": distribution.counts,
+            "a_t_lambda_min": lambda_min,
+            "a_t_kappa": kappa,
+            "a_t_gap_bound": 0.25 * self.n * kappa,
+            "incumbent_cert_kappa": incumbent_cert_kappa,
+            "incumbent_cert_gap_bound": incumbent_certificate.gap_upper_bound,
+            "a_t_mode": distribution.mode,
+        }
 
     def _update_animation(
         self,
@@ -576,6 +713,7 @@ class PDBO_CPU:
         """Refresh the built-in animation, preserving the callback API for test doubles."""
         if isinstance(self.animation, SpectralAnimation):
             lagrangian_value, objective_value = self._animation_objective_means()
+            a_t_payload = self._a_t_animation_payload()
             self.animation.update(
                 self.primal,
                 phase,
@@ -585,6 +723,7 @@ class PDBO_CPU:
                 total_iteration=iteration if total_iteration is None else total_iteration,
                 lagrangian_value=lagrangian_value,
                 objective_value=objective_value,
+                **a_t_payload,
             )
         else:
             self.animation.update(self.primal, phase, phases, iteration)
@@ -614,6 +753,8 @@ class PDBO_CPU:
             step_start = time.perf_counter()
             self._paper_step()
             improved = self._update_incumbent()
+            self._record_dual_state(total_step)
+            self._record_incumbent(total_step)
             if improved:
                 self.objective_history.append(self.objective)
                 self.timing_history.append(time.perf_counter() - self.start_time)
@@ -710,8 +851,12 @@ class PDBO_CPU:
     def optimize(self) -> PDBOResult:
         self.stop_reason = None
         phases = 2 if self.restart else 1
+        self.dual_history.clear()
+        self._incumbent_records.clear()
         self._prepare_run()
         total_step = 0
+        self._record_dual_state(total_step)
+        self._record_incumbent(total_step)
         last_phase = 1
         last_phase_iteration = 0
 
@@ -738,11 +883,14 @@ class PDBO_CPU:
         self.iterations_completed = total_step
 
         self._finalize_candidates()
+        self._record_incumbent(total_step)
+        self._report_incumbent_stability()
 
         self.runtime = time.perf_counter() - self.start_time
         if self.animation is not None:
             if isinstance(self.animation, SpectralAnimation):
                 lagrangian_value, objective_value = self._animation_objective_means()
+                a_t_payload = self._a_t_animation_payload()
                 self.animation.finish(
                     self.primal,
                     last_phase,
@@ -752,6 +900,7 @@ class PDBO_CPU:
                     total_iteration=total_step,
                     lagrangian_value=lagrangian_value,
                     objective_value=objective_value,
+                    **a_t_payload,
                 )
             else:
                 self.animation.finish(

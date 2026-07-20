@@ -17,24 +17,29 @@ class SpectralAnimation:
         eigenvectors: np.ndarray,
         bins: int,
         mode_label: str = "exact spectrum",
+        show_a_t: bool = False,
     ) -> None:
         self.eigenvalues = eigenvalues
         self.eigenvectors = eigenvectors
         self.bins = bins
         self.mode_label = mode_label
+        self.show_a_t = show_a_t
         self.bin_indices = None
         self.figure = None
         self.axes = None
         self.dual_axes = None
         self.z_axes = None
+        self.a_t_axes = None
         self.objective_axes = None
         self.bars = None
         self.dual_bars = None
         self.z_bars = None
+        self.a_t_bars = None
         self.lagrangian_line = None
         self.objective_line = None
         self.dual_edges = None
         self.z_edges = None
+        self.a_t_edges = None
         self.dual = None
         self.z = None
         self.objective_sample_keys = []
@@ -134,6 +139,31 @@ class SpectralAnimation:
     def _update_z_histogram(self, z: np.ndarray) -> None:
         self._update_histogram(z, "z_edges", "z_bars", "z_axes")
 
+    def _update_a_t_histogram(
+        self,
+        edges: np.ndarray,
+        counts: np.ndarray,
+    ) -> None:
+        edges = np.asarray(edges, dtype=np.float64)
+        counts = np.asarray(counts, dtype=np.float64)
+        if edges.shape != (self.bins + 1,) or counts.shape != (self.bins,):
+            raise ValueError("A_t histogram dimensions do not match animation bins")
+
+        self.a_t_edges = edges
+        if self.a_t_bars is None or self.a_t_axes is None:
+            return
+        for bar, left, right, count in zip(
+            self.a_t_bars,
+            edges[:-1],
+            edges[1:],
+            counts,
+        ):
+            bar.set_x(float(left))
+            bar.set_width(float(right - left))
+            bar.set_height(float(count))
+        self.a_t_axes.set_xlim(float(edges[0]), float(edges[-1]))
+        self.a_t_axes.set_ylim(0.0, max(float(np.max(counts)) * 1.15, 1.0))
+
     def _update_objective_history(
         self,
         phase: int,
@@ -206,12 +236,23 @@ class SpectralAnimation:
         self.bin_indices = np.clip(bin_indices, 0, self.bins - 1)
 
         plt.ion()
-        figure, axes = plt.subplots(2, 2, figsize=(14, 9), squeeze=False)
-        spectral_axes = axes[0, 0]
-        dual_axes = axes[0, 1]
-        z_axes = axes[1, 0]
-        objective_axes = axes[1, 1]
-        figure.subplots_adjust(bottom=0.12, hspace=0.35, wspace=0.25)
+        if self.show_a_t:
+            figure = plt.figure(figsize=(18, 9))
+            grid = figure.add_gridspec(2, 3)
+            spectral_axes = figure.add_subplot(grid[0, 0])
+            dual_axes = figure.add_subplot(grid[0, 1])
+            z_axes = figure.add_subplot(grid[0, 2])
+            a_t_axes = figure.add_subplot(grid[1, 0])
+            objective_axes = figure.add_subplot(grid[1, 1:])
+            figure.subplots_adjust(bottom=0.12, hspace=0.38, wspace=0.28)
+        else:
+            figure, axes = plt.subplots(2, 2, figsize=(14, 9), squeeze=False)
+            spectral_axes = axes[0, 0]
+            dual_axes = axes[0, 1]
+            z_axes = axes[1, 0]
+            a_t_axes = None
+            objective_axes = axes[1, 1]
+            figure.subplots_adjust(bottom=0.12, hspace=0.35, wspace=0.25)
         if figure.canvas.manager is not None:
             figure.canvas.manager.set_window_title("PDBO primal-dual dynamics")
         heights = self.mode_bin_means(primal)
@@ -259,6 +300,24 @@ class SpectralAnimation:
         z_axes.set_title("z distribution")
         z_axes.grid(axis="y", alpha=0.25)
 
+        a_t_bars = None
+        if a_t_axes is not None:
+            self.a_t_edges = edges.copy()
+            a_t_counts = np.zeros(self.bins, dtype=np.float64)
+            a_t_bars = a_t_axes.bar(
+                self.a_t_edges[:-1],
+                a_t_counts,
+                width=np.diff(self.a_t_edges),
+                align="edge",
+                color="tab:purple",
+            )
+            a_t_axes.set_xlim(float(self.a_t_edges[0]), float(self.a_t_edges[-1]))
+            a_t_axes.set_ylim(0.0, 1.0)
+            a_t_axes.set_xlabel("Eigenvalue of A_t")
+            a_t_axes.set_ylabel("Count")
+            a_t_axes.set_title("A_t spectrum (batch-mean y)")
+            a_t_axes.grid(axis="y", alpha=0.25)
+
         lagrangian_line, = objective_axes.plot(
             [],
             [],
@@ -288,10 +347,12 @@ class SpectralAnimation:
         self.axes = spectral_axes
         self.dual_axes = dual_axes
         self.z_axes = z_axes
+        self.a_t_axes = a_t_axes
         self.objective_axes = objective_axes
         self.bars = bars
         self.dual_bars = dual_bars
         self.z_bars = z_bars
+        self.a_t_bars = a_t_bars
         self.lagrangian_line = lagrangian_line
         self.objective_line = objective_line
         self.plt = plt
@@ -309,6 +370,14 @@ class SpectralAnimation:
         total_iteration: Optional[int] = None,
         lagrangian_value: Optional[float] = None,
         objective_value: Optional[float] = None,
+        a_t_edges: Optional[np.ndarray] = None,
+        a_t_counts: Optional[np.ndarray] = None,
+        a_t_lambda_min: Optional[float] = None,
+        a_t_kappa: Optional[float] = None,
+        a_t_gap_bound: Optional[float] = None,
+        incumbent_cert_kappa: Optional[float] = None,
+        incumbent_cert_gap_bound: Optional[float] = None,
+        a_t_mode: Optional[str] = None,
     ) -> None:
         if self.figure is None or not self.plt.fignum_exists(self.figure.number):
             self.figure = None
@@ -321,6 +390,8 @@ class SpectralAnimation:
             self._update_dual_histogram(self.dual)
         self.z = np.asarray(primal, dtype=np.float64) - 0.5
         self._update_z_histogram(self.z)
+        if a_t_edges is not None and a_t_counts is not None:
+            self._update_a_t_histogram(a_t_edges, a_t_counts)
         for bar, height in zip(self.bars, heights):
             bar.set_height(float(height))
 
@@ -338,6 +409,22 @@ class SpectralAnimation:
         if self.z_axes is not None:
             self.z_axes.set_title(
                 f"z distribution | round {phase}/{phases} | iteration {phase_iteration}"
+            )
+        if (
+            self.a_t_axes is not None
+            and a_t_lambda_min is not None
+        ):
+            mode = "" if a_t_mode is None else f" | {a_t_mode}"
+            self.a_t_axes.set_title(
+                "A_t spectrum (batch-mean y)"
+                f"{mode}\n"
+                f"lambda_min={a_t_lambda_min:.6g}"
+                f" | kappa={0.0 if a_t_kappa is None else a_t_kappa:.6g}"
+                f" | n*kappa/4={0.0 if a_t_gap_bound is None else a_t_gap_bound:.6g}\n"
+                "s* cert: kappa_cert="
+                f"{0.0 if incumbent_cert_kappa is None else incumbent_cert_kappa:.6g}"
+                " | n*kappa_cert/4="
+                f"{0.0 if incumbent_cert_gap_bound is None else incumbent_cert_gap_bound:.6g}"
             )
         if (
             lagrangian_value is not None
@@ -364,6 +451,14 @@ class SpectralAnimation:
         total_iteration: Optional[int] = None,
         lagrangian_value: Optional[float] = None,
         objective_value: Optional[float] = None,
+        a_t_edges: Optional[np.ndarray] = None,
+        a_t_counts: Optional[np.ndarray] = None,
+        a_t_lambda_min: Optional[float] = None,
+        a_t_kappa: Optional[float] = None,
+        a_t_gap_bound: Optional[float] = None,
+        incumbent_cert_kappa: Optional[float] = None,
+        incumbent_cert_gap_bound: Optional[float] = None,
+        a_t_mode: Optional[str] = None,
     ) -> None:
         if self.figure is None:
             return
@@ -376,6 +471,14 @@ class SpectralAnimation:
             total_iteration=total_iteration,
             lagrangian_value=lagrangian_value,
             objective_value=objective_value,
+            a_t_edges=a_t_edges,
+            a_t_counts=a_t_counts,
+            a_t_lambda_min=a_t_lambda_min,
+            a_t_kappa=a_t_kappa,
+            a_t_gap_bound=a_t_gap_bound,
+            incumbent_cert_kappa=incumbent_cert_kappa,
+            incumbent_cert_gap_bound=incumbent_cert_gap_bound,
+            a_t_mode=a_t_mode,
         )
         if self.figure is not None:
             self.plt.ioff()

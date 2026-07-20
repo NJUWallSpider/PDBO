@@ -3,7 +3,6 @@ import sys
 
 import numpy as np
 
-from pdbo.refinement import refine_binary_incumbent
 from src.problem_parser import (
     generate_Max_cut as generate_max_cut,
     generate_MIS as generate_mis,
@@ -13,6 +12,7 @@ from src.solver import PDBO_CPU
 from src.main import build_parser
 from src.spectral import (
     compute_animation_modes,
+    compute_h_s_spectrum_certificate,
     compute_spectral_window,
     compute_spectrum_distribution,
     histogram_edges,
@@ -66,6 +66,40 @@ def test_initial_threshold_candidates_are_archived_before_first_step():
     assert any(np.array_equal(solver.incumbent, candidate) for candidate in candidates)
 
 
+def test_nearest_and_bernoulli_rounding_modes():
+    indices, values = empty_qubo()
+    primal = np.array([[0.0, 0.25, 0.5, 0.75, 1.0]], dtype=np.float32)
+
+    nearest = PDBO_CPU(
+        n_vars=5,
+        Q_indices=indices,
+        Q_values=values,
+        max_iters=0,
+        rounding_mode="nearest",
+        verbose=False,
+    )
+    assert np.array_equal(nearest._round_primal(primal), [[0, 0, 0, 1, 1]])
+
+    bernoulli = PDBO_CPU(
+        n_vars=5,
+        Q_indices=indices,
+        Q_values=values,
+        max_iters=0,
+        rounding_mode="bernoulli",
+        seed=7,
+        verbose=False,
+    )
+    bernoulli.rng = np.random.default_rng(123)
+    expected_rng = np.random.default_rng(123)
+    expected = (expected_rng.random(primal.shape) < primal).astype(np.float32)
+    assert np.array_equal(bernoulli._round_primal(primal), expected)
+
+
+def test_cli_accepts_bernoulli_rounding():
+    args = build_parser().parse_args(["--rounding", "bernoulli"])
+    assert args.rounding == "bernoulli"
+
+
 def test_spectral_dual_initialization_targets_requested_burn_in():
     graph = random_graph(n=2, d=1, seed=0)
     data = generate_max_cut(graph)
@@ -88,7 +122,7 @@ def test_spectral_dual_initialization_targets_requested_burn_in():
     assert np.allclose(solver.dual, 1.6, atol=1e-6)
 
 
-def test_spectral_primal_step_has_requested_worst_mode_multiplier():
+def test_spectral_primal_step_has_requested_contractive_worst_mode_multiplier():
     graph = random_graph(n=2, d=1, seed=0)
     data = generate_max_cut(graph)
     solver = PDBO_CPU(
@@ -98,7 +132,7 @@ def test_spectral_primal_step_has_requested_worst_mode_multiplier():
         c=data["c"],
         batch_size=1,
         primal_lr_mode="spectral",
-        spectral_step_fraction=0.5,
+        spectral_step_fraction=0.75,
         dual_lr=0.2,
         dual_init_mode="spectral",
         dual_burn_in=10,
@@ -110,7 +144,8 @@ def test_spectral_primal_step_has_requested_worst_mode_multiplier():
     worst_multiplier = 1.0 - 2.0 * solver.primal_lr * (
         solver.primal_lr_lambda_max + solver.dual_init
     )
-    assert np.isclose(worst_multiplier, 0.5)
+    assert np.isclose(worst_multiplier, -0.5)
+    assert abs(worst_multiplier) < 1.0
     assert solver.primal_lr > 0.0
 
 
@@ -250,6 +285,72 @@ def test_spectral_animation_bins_mean_mode_lengths():
     )
 
     assert np.allclose(animation.mode_bin_means(solver.primal), [0.15, 0.35])
+
+
+def test_h_s_spectrum_certificate_is_exact_on_single_edge():
+    graph = random_graph(n=2, d=1, seed=0)
+    data = generate_max_cut(graph)
+    solver = PDBO_CPU(
+        n_vars=2,
+        Q_indices=data["Q_indices"],
+        Q_values=data["Q_values"],
+        c=data["c"],
+        max_iters=0,
+        verbose=False,
+    )
+
+    optimal = compute_h_s_spectrum_certificate(
+        solver.W,
+        np.array([-1.0, 1.0]),
+        seed=0,
+        bins=2,
+    )
+    uncut = compute_h_s_spectrum_certificate(
+        solver.W,
+        np.array([1.0, 1.0]),
+        seed=0,
+        bins=2,
+    )
+
+    assert optimal.distribution.mode == "exact"
+    assert np.allclose(optimal.distribution.eigenvalues, [0.0, 2.0])
+    assert np.isclose(optimal.gap_upper_bound, 0.0)
+    assert np.allclose(uncut.distribution.eigenvalues, [-2.0, 0.0])
+    assert np.isclose(uncut.gap_upper_bound, 1.0)
+
+
+def test_a_t_animation_payload_has_no_terminal_certificate_log(capsys):
+    graph = random_graph(n=2, d=1, seed=0)
+    data = generate_max_cut(graph)
+    solver = PDBO_CPU(
+        n_vars=2,
+        Q_indices=data["Q_indices"],
+        Q_values=data["Q_values"],
+        c=data["c"],
+        max_iters=0,
+        maxcut_certificate=True,
+        spectral_animation_bins=2,
+        verbose=False,
+    )
+
+    payload = solver._a_t_animation_payload()
+    first_certificate = solver._current_incumbent_certificate()
+    second_certificate = solver._current_incumbent_certificate()
+    output = capsys.readouterr().out
+
+    assert payload["a_t_counts"].shape == (2,)
+    assert np.isclose(payload["a_t_kappa"], max(-payload["a_t_lambda_min"], 0.0))
+    assert np.isclose(payload["a_t_gap_bound"], solver.n * payload["a_t_kappa"] / 4.0)
+    assert np.isclose(
+        payload["incumbent_cert_kappa"],
+        max(-first_certificate.lambda_min, 0.0),
+    )
+    assert first_certificate is second_certificate
+    assert np.isclose(
+        payload["incumbent_cert_gap_bound"],
+        solver.n * max(-first_certificate.lambda_min, 0.0) / 4.0,
+    )
+    assert "h_s_certificate" not in output
 
 
 def test_large_spectral_animation_uses_approximate_modes_without_size_limit():
@@ -528,26 +629,6 @@ def test_quadratic_solver_smoke():
     assert result.runtime >= 0.0
 
 
-def test_incremental_refinement_is_monotone_and_one_flip_stable():
-    graph = random_graph(n=30, d=3, seed=7)
-    data = generate_max_cut(graph)
-    initial = np.random.default_rng(4).integers(0, 2, size=30, dtype=np.int32)
-    initial_objective = float(
-        initial @ data["Q_sparse"].dot(initial) + data["c"] @ initial
-    )
-
-    result = refine_binary_incumbent("mc", initial, data)
-
-    assert result.objective <= initial_objective + 1e-7
-    for index in range(initial.size):
-        neighbor = result.bits.copy()
-        neighbor[index] = 1 - neighbor[index]
-        neighbor_objective = float(
-            neighbor @ data["Q_sparse"].dot(neighbor) + data["c"] @ neighbor
-        )
-        assert neighbor_objective >= result.objective - 1e-7
-
-
 def test_progress_logging_excludes_maxcut_bounds(capsys):
     graph = random_graph(n=4, d=1, seed=0)
     data = generate_max_cut(graph)
@@ -618,11 +699,9 @@ def test_cli_smoke():
             "--check_every",
             "5",
             "--no-verbose",
-            "--refine",
         ],
         check=True,
         capture_output=True,
         text=True,
     )
     assert "best=" in proc.stdout
-    assert "refined_best=" in proc.stdout

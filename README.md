@@ -27,6 +27,9 @@ pytest
 完整的中文命令行参数说明、适用范围、调参建议和保存规则见
 [`docs/PDBO_solver_parameters_zh.md`](docs/PDBO_solver_parameters_zh.md)。
 
+Max-Cut 上 direct GD、scalar dual 与完整 PDBO 的 landscape、吸引域和谱轨迹分析见
+[`docs/PDBO_MaxCut_landscape_analysis_zh.md`](docs/PDBO_MaxCut_landscape_analysis_zh.md)。
+
 Run all bundled small examples:
 
 ```bash
@@ -46,29 +49,31 @@ python src/main.py --task mc --graph Gset --Gset_id 1 --batch 100 --dual_init 6
 ```
 
 For a spectrum-scaled Max-Cut run, initialize at the PSD frontier and choose
-the primal step so that the initial highest-mode multiplier remains positive:
+the primal step so that all initial spectral multipliers are non-expansive:
 
 ```bash
 python src/main.py --task mc --graph Gset --Gset_id 70 --batch 10 \
   --max_iters 3000 --lr_y 0.02 --rho 0.05 \
   --dual_init_mode spectral --dual_burn_in 0 \
   --primal_lr_mode spectral --spectral_step_fraction 0.5 \
-  --conditional_rounding --refine
+  --conditional_rounding
 ```
 
 The automatic parameters are
 
 ```text
 dual_init = -lambda_min(W) + dual_psd_margin + dual_lr * dual_burn_in / 4
-primal_lr = spectral_step_fraction / (2 * (lambda_max(W) + dual_init))
+primal_lr = spectral_step_fraction / (lambda_max(W) + dual_init)
 ```
 
 Thus `dual_burn_in` measures the idealized number of centre steps before the
-PSD boundary, while `0 < spectral_step_fraction < 1` guarantees a positive
-initial multiplier for every eigenmode. `conditional_rounding` retains the
+PSD boundary, while `0 < spectral_step_fraction < 1` guarantees
+`abs(1 - 2 * primal_lr * (lambda_k + dual_init)) <= 1` for every initial
+eigenmode when the shifted Hessian is positive semidefinite. Values above
+`0.5` intentionally allow sign-alternating but contractive high modes.
+`conditional_rounding` retains the
 best multilinear/Bernoulli expectation seen over the full trajectory and
-derandomizes it at the end. The final one-flip refinement is sparse and
-incremental.
+derandomizes it at the end.
 
 Run PDBO on a LABS instance:
 
@@ -105,7 +110,9 @@ round=1/2 spectral_window=(-lambda_(r+1), -lambda_1) lambda_1=... lambda_(r+1)=.
 
 Animate the RMS projection length of `x - 0.5` along the eigenvectors of `W`,
 alongside histograms of the current dual variables `y` and centered primal
-variables `z = x - 0.5`, plus the batch-mean values of `L(x, y)` and `f(x)`:
+variables `z = x - 0.5`, plus the batch-mean values of `L(x, y)` and `f(x)`.
+Max-Cut animations also show the eigenvalue distribution of
+`H_s = W + Diag(-s * (W @ s))` for the current incumbent cut:
 
 ```bash
 pip install -e ".[visualization]"
@@ -114,16 +121,29 @@ python src/main.py --task mc --graph Gset --Gset_id 1 --spectral_animation
 
 The chart uses 50 equal-width bins by default. Within each eigenvalue bin it
 plots the mean mode length across eigenvectors, after taking the RMS across the
-primal batch. Two panels show the value counts for `y` and `z`; the fourth
-plots the batch-mean `L(x, y)` and `f(x)` against the global iteration `t`.
+primal batch. Two panels show the value counts for `y` and `z`; another plots
+the batch-mean `L(x, y)` and `f(x)` against the global iteration `t`. On
+Max-Cut runs, the fifth panel shows the incumbent's `H_s` spectrum and the
+additive certificate `-n * lambda_min(H_s) / 4`.
 Graphs with `n <= 2000` use the exact eigendecomposition. Larger
 graphs use 128 Lanczos-Ritz modes across the spectrum by default; set
 `--spectral_animation_modes` to trade initialization and refresh cost against
 spectral resolution. Continuous execution refreshes every 100 iterations by
 default; set `--spectral_animation_every` to change the interval. All four
-panels refresh together, so the objective curves use the same sampled
+base panels, plus the Max-Cut certificate panel when present, refresh together,
+so the objective curves use the same sampled
 iterations; manual stepping still refreshes every step. The final window
 remains open until it is closed.
+
+Each Max-Cut animation refresh also prints the certificate to the terminal:
+
+```text
+h_s_certificate ... spectrum=exact lambda_min(H_s)=... -n/4*lambda_min(H_s)=...
+```
+
+For `n > 2000`, the `H_s` histogram uses stochastic Lanczos quadrature and is
+marked `approx-slq`; its reported minimum eigenvalue includes the eigensolver
+residual margin used by the additive-gap certificate.
 
 For example, G64 can be animated without constructing a dense `7000 x 7000`
 eigenvector matrix:
@@ -190,18 +210,19 @@ Extra rounded candidates sampled from the final relaxed batch:
 python src/main.py --task mc --graph Gset --Gset_id 1 --rounding_samples 8
 ```
 
+Use one Bernoulli-rounded incumbent candidate per trajectory at initialization
+and after every PDBO step (the default is `--rounding nearest`):
+
+```bash
+python src/main.py --task mc --graph Gset --Gset_id 1 --rounding bernoulli
+```
+
 Restart once from the first phase's best rounded solution. The primal batch is
 reset to that solution and the dual variables are restored to `dual_init`
 before a second phase with the same `max_iters` budget:
 
 ```bash
 python src/main.py --task mc --graph Gset --Gset_id 1 --restart
-```
-
-Greedy one-flip local-search refinement:
-
-```bash
-python src/main.py --task mc --graph Gset --Gset_id 1 --refine
 ```
 
 Set the deterministic centre-perturbation tolerance from paper Algorithm 1:
@@ -240,7 +261,6 @@ If you use this code, please cite:
 
 ## Repository Layout
 
-- `pdbo/`: public package API.
 - `src/solver.py`: paper-aligned CPU PDBO implementation.
 - `src/spectral.py`: sparse eigensolver and spectrum-distribution utilities.
 - `src/spectral_animation.py`: interactive spectral-mode visualization.

@@ -27,6 +27,14 @@ class SpectrumDistribution:
     eigenvectors: Optional[np.ndarray] = None
 
 
+@dataclass(frozen=True)
+class HsSpectrumCertificate:
+    distribution: SpectrumDistribution
+    lambda_min: float
+    gap_upper_bound: float
+    eigen_residual: float
+
+
 def smallest_eigenpair(
     matrix: sparse.csr_matrix,
     n: int,
@@ -208,8 +216,12 @@ def compute_spectrum_distribution(
     n: int,
     seed: int,
     include_eigenvectors: bool = False,
+    bins: int = SPECTRUM_BINS,
+    spectral_range: Optional[Tuple[float, float]] = None,
 ) -> SpectrumDistribution:
     """Build a full-spectrum histogram, exact when dense decomposition is feasible."""
+    if bins < 1:
+        raise ValueError("spectrum histogram bins must be positive")
     matrix64 = matrix.astype(np.float64)
     if n <= EXACT_SPECTRUM_LIMIT:
         if include_eigenvectors:
@@ -217,7 +229,7 @@ def compute_spectrum_distribution(
         else:
             eigenvalues = np.linalg.eigvalsh(matrix64.toarray())
             eigenvectors = None
-        edges = histogram_edges(float(eigenvalues[0]), float(eigenvalues[-1]), SPECTRUM_BINS)
+        edges = histogram_edges(float(eigenvalues[0]), float(eigenvalues[-1]), bins)
         counts, _ = np.histogram(eigenvalues, bins=edges)
         return SpectrumDistribution(
             mode="exact",
@@ -227,14 +239,17 @@ def compute_spectrum_distribution(
             eigenvectors=eigenvectors,
         )
 
-    lambda_min = float(
-        sparse_linalg.eigsh(matrix64, k=1, which="SA", return_eigenvectors=False)[0]
-    )
-    lambda_max = float(
-        sparse_linalg.eigsh(matrix64, k=1, which="LA", return_eigenvectors=False)[0]
-    )
-    edges = histogram_edges(lambda_min, lambda_max, SPECTRUM_BINS)
-    normalized_counts = np.zeros(SPECTRUM_BINS, dtype=np.float64)
+    if spectral_range is None:
+        lambda_min = float(
+            sparse_linalg.eigsh(matrix64, k=1, which="SA", return_eigenvectors=False)[0]
+        )
+        lambda_max = float(
+            sparse_linalg.eigsh(matrix64, k=1, which="LA", return_eigenvectors=False)[0]
+        )
+    else:
+        lambda_min, lambda_max = map(float, spectral_range)
+    edges = histogram_edges(lambda_min, lambda_max, bins)
+    normalized_counts = np.zeros(bins, dtype=np.float64)
     rng = np.random.default_rng(seed + 1)
     steps = min(SLQ_STEPS, n)
 
@@ -248,4 +263,55 @@ def compute_spectrum_distribution(
         mode="approx-slq",
         edges=edges,
         counts=normalized_counts * (n / SLQ_PROBES),
+    )
+
+
+def compute_h_s_spectrum_certificate(
+    matrix: sparse.csr_matrix,
+    sign: np.ndarray,
+    seed: int,
+    bins: int = SPECTRUM_BINS,
+) -> HsSpectrumCertificate:
+    """Return the spectrum of ``H_s`` and its Max-Cut additive-gap certificate."""
+    matrix64 = matrix.astype(np.float64).tocsr()
+    n = matrix64.shape[0]
+    if matrix64.shape != (n, n):
+        raise ValueError("H_s certificate requires a square matrix")
+
+    sign64 = np.asarray(sign, dtype=np.float64).reshape(-1)
+    if sign64.shape != (n,) or not np.all(np.isin(sign64, (-1.0, 1.0))):
+        raise ValueError("H_s certificate requires a sign vector in {-1, +1}^n")
+
+    gamma = -sign64 * (matrix64 @ sign64)
+    h_s = (matrix64 + sparse.diags(gamma, format="csr")).tocsr()
+
+    if n <= EXACT_SPECTRUM_LIMIT:
+        distribution = compute_spectrum_distribution(
+            h_s,
+            n,
+            seed,
+            bins=bins,
+        )
+        if distribution.eigenvalues is None:
+            raise RuntimeError("exact H_s spectrum did not return eigenvalues")
+        lambda_min = float(distribution.eigenvalues[0])
+        residual = 0.0
+    else:
+        lambda_min, _, residual = smallest_eigenpair(h_s, n)
+        lambda_max, _ = largest_eigenvalue(h_s, n)
+        distribution = compute_spectrum_distribution(
+            h_s,
+            n,
+            seed,
+            bins=bins,
+            spectral_range=(lambda_min, lambda_max),
+        )
+
+    # H_s s = 0 analytically, so its true minimum eigenvalue cannot be positive.
+    lambda_min = min(lambda_min, 0.0)
+    return HsSpectrumCertificate(
+        distribution=distribution,
+        lambda_min=lambda_min,
+        gap_upper_bound=-0.25 * n * lambda_min,
+        eigen_residual=residual,
     )
